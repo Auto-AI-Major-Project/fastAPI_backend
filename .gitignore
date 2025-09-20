@@ -1,0 +1,31 @@
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+ENV/
+env/
+
+# VSCode settings
+.vscode/
+*.code-workspace
+
+# Logs
+logs.log
+*.log
+
+# Trained models (optional, can be large)
+trained_models/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Python package build / distribution folders
+build/
+dist/
+*.egg-info/
+.eggs/
