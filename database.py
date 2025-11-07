@@ -1,6 +1,6 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, JSON , Boolean ,  ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker , relationship
 from datetime import datetime
 import os
 from dotenv import load_dotenv
@@ -22,11 +22,33 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    full_name = Column(String, nullable=True)
+    profession = Column(String, nullable=True)          
+    company = Column(String, nullable=True)             
+    profile_image = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True)
+    is_verified = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationship with AutoML runs
+    automl_runs = relationship("AutoMLRun", back_populates="user", cascade="all, delete-orphan")
+
+
 # Database Models
 class AutoMLRun(Base):
     __tablename__ = "automl_runs"
     
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     filename = Column(String, nullable=False)
     target_column = Column(String, nullable=False)
     top_model = Column(String, nullable=False)
@@ -34,18 +56,25 @@ class AutoMLRun(Base):
     processing_time = Column(Float, nullable=False)
     recommendations = Column(JSON, nullable=False)  # Store the full recommendations array
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="automl_runs")
+
+    metrics = relationship("ModelMetrics", back_populates="run", cascade="all, delete-orphan")
     
 class ModelMetrics(Base):
     __tablename__ = "model_metrics"
     
     id = Column(Integer, primary_key=True, index=True)
-    run_id = Column(Integer, nullable=False)  # Foreign key to automl_runs
+    # run_id = Column(Integer, nullable=False)  # Foreign key to automl_runs
+    run_id = Column(Integer, ForeignKey('automl_runs.id', ondelete='CASCADE'), nullable=False)
     model_name = Column(String, nullable=False)
     accuracy = Column(Float, nullable=False)
     auc = Column(Float, nullable=True)
     f1_score = Column(Float, nullable=True)
     train_time = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    run = relationship("AutoMLRun", back_populates="metrics")
 
 # Create tables
 def create_tables():

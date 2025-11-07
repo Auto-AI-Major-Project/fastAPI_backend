@@ -1,6 +1,6 @@
 
 from http.client import HTTPException
-from fastapi import FastAPI, UploadFile, File, Form, Depends
+from fastapi import FastAPI, UploadFile, File, Form, Depends , status
 from fastapi.responses import FileResponse , JSONResponse
 from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,17 +9,31 @@ import pandas as pd
 import tempfile
 import time
 import os
-from database import get_db, create_tables, AutoMLRun, ModelMetrics
+from database import get_db, create_tables, AutoMLRun, ModelMetrics, User
 from fastapi.responses import StreamingResponse
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime , timedelta
 import numpy as np
-from typing import List, Dict, Any
+from typing import List, Dict, Any , Optional
 import json
 
 
-app = FastAPI()
+# app = FastAPI()
 
+from auth import (
+    get_current_user,
+    get_password_hash, 
+    authenticate_user, 
+    create_access_token,
+    get_current_active_user,
+    get_current_user_optional,
+    ACCESS_TOKEN_EXPIRE_MINUTES
+)
+from schemas import UserSignup, UserLogin, UserResponse, Token, PasswordChange, UserUpdate , UserProfile
+
+
+app = FastAPI(title="AutoML API with Authentication")
+# app.include_router(profile_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,11 +51,274 @@ def startup_event():
 MODEL_DIR = "trained_models"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
+
+# ==================== AUTHENTICATION ENDPOINTS ====================
+@app.post("/api/auth/signup")
+async def signup(user_data: UserSignup, db: Session = Depends(get_db)):
+    """
+    Register a new user - matches React SignUp component
+    """
+    try:
+        # Check if email already exists
+        existing_user = db.query(User).filter(User.email == user_data.email).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"message": "Email already registered"}
+            )
+        
+        # Check if username already exists
+        existing_username = db.query(User).filter(User.username == user_data.username).first()
+        if existing_username:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"message": "Username already taken"}
+            )
+        
+        # Create new user
+        hashed_password = get_password_hash(user_data.password)
+        new_user = User(
+            email=user_data.email,
+            username=user_data.username,
+            hashed_password=hashed_password,
+            full_name=user_data.full_name or user_data.username,
+            is_active=True,
+            is_verified=False
+        )
+        
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        
+        # Create access token
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": new_user.email, "user_id": new_user.id},
+            expires_delta=access_token_expires
+        )
+        
+        return {
+            "token": access_token,
+            "user": {
+                "id": new_user.id,
+                "email": new_user.email,
+                "username": new_user.username,
+                "full_name": new_user.full_name
+            },
+            "message": "Account created successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": f"An error occurred during registration: {str(e)}"}
+        )
+
+
+@app.post("/api/auth/signin")
+async def signin(user_credentials: UserLogin, db: Session = Depends(get_db)):
+    """
+    Login user and return access token - matches React SignIn component
+    """
+    try:
+        user = authenticate_user(db, user_credentials.email, user_credentials.password)
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "Incorrect email or password"}
+            )
+        
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"message": "Inactive user account"}
+            )
+        
+        # Create access token
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user.email, "user_id": user.id},
+            expires_delta=access_token_expires
+        )
+        
+        return {
+            "token": access_token,
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "username": user.username,
+                "full_name": user.full_name
+            },
+            "message": "Signed in successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": f"An error occurred during sign in: {str(e)}"}
+        )
+
+
+@app.get("/api/auth/me", response_model=UserResponse)
+async def get_current_user_info(current_user: User = Depends(get_current_active_user)):
+    """
+    Get current user information
+    """
+    return current_user
+
+
+@app.put("/api/auth/update-profile", response_model=UserResponse)
+async def update_profile(
+    user_update: UserUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update user profile
+    """
+    try:
+        if user_update.full_name is not None:
+            current_user.full_name = user_update.full_name
+        
+        if user_update.username is not None:
+            # Check if username is already taken
+            existing = db.query(User).filter(
+                User.username == user_update.username,
+                User.id != current_user.id
+            ).first()
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"message": "Username already taken"}
+                )
+            current_user.username = user_update.username
+        
+        current_user.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(current_user)
+        
+        return current_user
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": f"An error occurred while updating profile: {str(e)}"}
+        )
+
+
+@app.post("/api/auth/change-password")
+async def change_password(
+    password_data: PasswordChange,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Change user password
+    """
+    try:
+        from auth import verify_password
+        
+        # Verify old password
+        if not verify_password(password_data.old_password, current_user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"message": "Incorrect old password"}
+            )
+        
+        # Update password
+        current_user.hashed_password = get_password_hash(password_data.new_password)
+        current_user.updated_at = datetime.utcnow()
+        db.commit()
+        
+        return {"message": "Password updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": f"An error occurred while changing password: {str(e)}"}
+        )
+
+
+@app.post("/api/auth/logout")
+async def logout(current_user: User = Depends(get_current_active_user)):
+    """
+    Logout endpoint (client-side token removal)
+    """
+    return {"message": "Logged out successfully"}
+
+
+
+
+
+
+# ---------- GET PROFILE ----------
+@app.get("/api/auth/profile", response_model=UserProfile)
+def get_profile(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get logged-in user's profile"""
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {
+        "username": user.username,
+        "email": user.email,
+        "profession": user.profession,
+        "company": user.company,
+        "profileImage": user.profile_image
+    }
+
+
+# ---------- UPDATE PROFILE ----------
+@app.put("/api/auth/profile", response_model=UserProfile)
+def update_profile(
+    updated_data: UserProfile,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Update logged-in user's profile"""
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.username = updated_data.username
+    user.email = updated_data.email
+    user.profession = updated_data.profession
+    user.company = updated_data.company
+    user.profile_image = updated_data.profileImage
+    user.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "username": user.username,
+        "email": user.email,
+        "profession": user.profession,
+        "company": user.company,
+        "profileImage": user.profile_image
+    }
+
+
+
+
+
 @app.post("/automl")
 async def automl_pipeline(
     file: UploadFile = File(...), 
     target_col: str = Form(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Full AutoML pipeline:
@@ -103,6 +380,7 @@ async def automl_pipeline(
     try:
         # Create main AutoML run record
         automl_run = AutoMLRun(
+            user_id=current_user.id,
             filename=file.filename,
             target_column=target_col,
             top_model=best_model.__class__.__name__,
@@ -165,15 +443,21 @@ async def automl_pipeline(
         return response
 
 @app.get("/automl/runs")
-def get_all_runs(db: Session = Depends(get_db)):
+def get_all_runs(db: Session = Depends(get_db),
+                current_user: User = Depends(get_current_user)
+                 ):
     """Get all AutoML runs from database"""
-    runs = db.query(AutoMLRun).all()
+    runs = db.query(AutoMLRun).filter(AutoMLRun.user_id == current_user.id).all()
     return {"runs": runs}
 
 @app.get("/automl/runs/{run_id}")
-def get_run_details(run_id: int, db: Session = Depends(get_db)):
-    """Get specific AutoML run details with metrics"""
-    run = db.query(AutoMLRun).filter(AutoMLRun.id == run_id).first()
+def get_run_details(run_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Fetch the run that belongs to the current user
+    run = (
+        db.query(AutoMLRun)
+        .filter(AutoMLRun.id == run_id, AutoMLRun.user_id == current_user.id)
+        .first()
+    )
     if not run:
         return {"error": "Run not found"}
     
