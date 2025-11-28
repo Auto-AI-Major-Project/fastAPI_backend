@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, validator
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 # User schemas
@@ -64,4 +64,51 @@ class UserProfile(BaseModel):
     profileImage: str | None = None  # matches frontend naming
 
     class Config:
-        orm_mode = True
+        from_attributes = True
+
+
+class DataCleaningSessionBase(BaseModel):
+    filename: str
+    original_shape: Optional[str] = None
+    cleaned_shape: Optional[str] = None
+    cleaning_method: Optional[str] = None
+    status: str = "uploaded"
+
+class DataCleaningSessionCreate(DataCleaningSessionBase):
+    user_id: int
+
+class DataCleaningSessionResponse(DataCleaningSessionBase):
+    id: int
+    user_id: int
+    upload_date: datetime
+    cleaned_date: Optional[datetime] = None
+    operations_applied: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+class DataInspectionResponse(BaseModel):
+    filename: str
+    shape: List[int]
+    missing_values: Dict[str, int]
+    data_types: Dict[str, str]
+    numeric_columns: List[str]
+    categorical_columns: List[str]
+    datetime_columns: List[str]
+    preview_first_5_rows: str
+    summary_statistics_markdown: str
+    message: str
+
+class CleaningOperationRequest(BaseModel):
+    operations: List[str]
+
+class CleaningResponse(BaseModel):
+    status: str
+    message: str
+    original_shape: List[int]
+    final_shape: List[int]
+    cleaned_filename: str
+    operations_summary: Optional[Dict[str, str]] = None
+    cleaning_summary: Optional[List[str]] = None
+    key_insights: Optional[str] = None
+    next_steps: Dict[str, str]

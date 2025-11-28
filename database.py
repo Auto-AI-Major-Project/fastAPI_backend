@@ -42,6 +42,8 @@ class User(Base):
     # Relationship with AutoML runs
     automl_runs = relationship("AutoMLRun", back_populates="user", cascade="all, delete-orphan")
 
+    cleaning_sessions = relationship("DataCleaningSession", back_populates="user", cascade="all, delete-orphan")
+
 
 # Database Models
 class AutoMLRun(Base):
@@ -75,6 +77,25 @@ class ModelMetrics(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     run = relationship("AutoMLRun", back_populates="metrics")
+
+
+class DataCleaningSession(Base):
+    """Model to track data cleaning sessions"""
+    __tablename__ = "data_cleaning_sessions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    filename = Column(String(255), nullable=False)
+    original_shape = Column(String(50))  # e.g., "(1000, 20)"
+    cleaned_shape = Column(String(50))
+    cleaning_method = Column(String(20))  # "manual" or "automatic"
+    operations_applied = Column(Text)  # JSON string or text description
+    status = Column(String(20), default="uploaded")  # uploaded, cleaning, cleaned, failed
+    upload_date = Column(DateTime, default=datetime.utcnow)
+    cleaned_date = Column(DateTime, nullable=True)
+    
+    # Relationship
+    user = relationship("User", back_populates="cleaning_sessions")
 
 # Create tables
 def create_tables():

@@ -805,7 +805,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import create_tables
-from routes import auth_routes, automl_routes, profile_routes
+from routes import auth_routes, automl_routes, data_cleaning_routes, profile_routes
 
 app = FastAPI(title="AutoML API with Authentication")
 
@@ -826,6 +826,9 @@ def startup_event():
 app.include_router(auth_routes.router)
 app.include_router(profile_routes.router)
 app.include_router(automl_routes.router)
+app.include_router(auth_routes.router)
+app.include_router(automl_routes.router)
+app.include_router(data_cleaning_routes.router)
 
 @app.get("/health")
 def health_check():
